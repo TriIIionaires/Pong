@@ -1,0 +1,200 @@
+﻿@page "/"
+@using Microsoft.AspNetCore.SignalR.Client
+@inject IJSRuntime JS
+
+@if (isGameStarted)
+{
+	<div class="container mb-1">
+		<div class="row">
+			<div class="col fw-bold text-start text-truncate" style="font-size: 2vw; color: indianred">
+				@playerScores.ElementAt(0).Key
+			</div>
+			<div class="col fw-bold text-center" style="font-size: 2vw">
+				@playerScores.ElementAt(0).Value - @playerScores.ElementAt(1).Value
+			</div>
+			<div class="col fw-bold text-end text-truncate" style="font-size: 2vw; color: cornflowerblue">
+				@playerScores.ElementAt(1).Key
+			</div>
+		</div>
+	</div>
+
+	@if (playerScores.ContainsValue(5))
+	{
+		<div class="container" style="display: flex; justify-content: center; align-items: center; position: relative; aspect-ratio: 18/10; border: solid; border-width: 2px">
+			@foreach (string player in playerScores.Keys)
+			{
+				if (playerScores[player] == 5)
+				{
+					<p class="fw-bold text-center" style="font-size: 2vw">@player wins!</p>
+					break;
+				}
+			}
+		</div>
+	}
+	else
+	{
+		<div class="container p-0" id="board" @onkeydown="KeyDown" tabindex="0" style="position: relative; aspect-ratio: 18/10; border: solid; border-width: 2px">
+			<div id="player0">
+				<style>
+					#player0 {
+						position: absolute;
+						background-color: indianred;
+						width: 2%;
+						height: 20%;
+						top: 40%;
+						left: 3%
+					}
+				</style>
+			</div>
+			<div id="player1">
+				<style>
+					#player1 {
+						position: absolute;
+						background-color: cornflowerblue;
+						width: 2%;
+						height: 20%;
+						top: 40%;
+						left: 95%
+					}
+				</style>
+			</div>
+			<div id="ball">
+				<style>
+					#ball {
+						position: absolute;
+						background-color: gold;
+						width: 2.5%;
+						height: 4.5%;
+						border-radius: 50%;
+						top: 47%;
+						left: 49%
+					}
+				</style>
+			</div>
+		</div>
+	}
+} 
+else
+{
+	<div class="card mb-3">
+		<h5 class="card-header">Player Queue</h5>
+		<div class="card-body pb-1">
+			@if (playerScores.Count > 0)
+			{
+				<ul class="mb-2">
+					@for (int i = 0; i < playerScores.Count; i++)
+					{
+						<li>@playerScores.ElementAt(i).Key</li>
+					}
+				</ul>
+			}
+			else
+			{
+				<p class="fst-italic">No players in queue</p>
+			}
+
+			@if (playerScores.Count == 2)
+			{
+				<p class="fw-bold" style="color: #26b050">Match paired!</p>
+			}
+		</div>
+	</div>
+
+	<div class="form-floating mb-3">
+		<input type="text" class="form-control" id="UsernameInput" @bind="username">
+		<label for="UsernameInput">Username</label>
+	</div>
+
+	<button class="btn btn-primary" type="button" id="registerButton" @onclick="RegisterPlayer">Join Game</button>
+}
+
+<script>
+	document.body.style.overflow = "hidden";
+	document.body.style.backgroundColor = "#FFFFFF";
+</script>
+
+@code {
+	private string? username;
+	private string connectionAddress = "localhost:5051";
+	private Dictionary<string, int> playerScores = new();
+	private Dictionary<string, int> previousScores = new();
+	private double[] ballPos = [49, 47];
+	private bool isGameStarted = false;
+	private HubConnection? hubConnection;
+
+	protected override async Task OnInitializedAsync() {
+		hubConnection = new HubConnectionBuilder()
+			.WithUrl($"http://{connectionAddress}/pongHub")
+			.WithAutomaticReconnect()
+			.Build();
+
+		hubConnection.On<Dictionary<string, int>>("UpdateLeaderboard_PONG", async(scores) =>
+		{
+			playerScores = scores;
+			await InvokeAsync(StateHasChanged);
+		});
+
+		hubConnection.On<int, int>("MovePaddle_PONG", async(player_id, position) =>
+		{
+			await JS.InvokeVoidAsync("MovePaddle", $"player{player_id}", position);
+			await InvokeAsync(StateHasChanged);
+		});
+
+		hubConnection.On<double[]>("MoveBall_PONG", async(position) =>
+		{
+			ballPos = position;
+			await JS.InvokeVoidAsync("MoveBall", position[0], position[1]);
+			await InvokeAsync(StateHasChanged);
+		});
+
+		hubConnection.On("GameStarted_PONG", async() =>
+		{
+			isGameStarted = true;
+			await InvokeAsync(StateHasChanged);
+			await JS.InvokeVoidAsync("SetFocusToElement", "board");
+		});
+
+		hubConnection.On<Dictionary<string,int>>("GameOver_PONG", async(scores) =>
+		{
+			await InvokeAsync(StateHasChanged);
+			await Task.Delay(3000);
+
+			previousScores = playerScores;
+			playerScores = scores;
+			isGameStarted = false;
+
+			await InvokeAsync(StateHasChanged);
+		});
+
+		await hubConnection.StartAsync();
+		await hubConnection.SendAsync("GetPlayerQueue");
+	}
+
+	protected async void KeyDown(KeyboardEventArgs e)
+	{
+		if (isGameStarted)
+		{
+			if (e.Key == "ArrowUp")
+			{
+				await hubConnection.SendAsync("MoveUp", Array.IndexOf(playerScores.Keys.ToArray(), username));
+			}
+			else if (e.Key == "ArrowDown")
+			{
+				await hubConnection.SendAsync("MoveDown", Array.IndexOf(playerScores.Keys.ToArray(), username));
+			}
+		}
+	}
+
+	private async Task RegisterPlayer()
+	{
+		if (!string.IsNullOrEmpty(username))
+		{
+			await hubConnection.SendAsync("RegisterPlayer", username);
+		}
+	}
+
+	private async Task StartGame()
+	{
+		await hubConnection.SendAsync("StartGame");
+	}
+}
